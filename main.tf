@@ -4,16 +4,12 @@ terraform {
       source = "hashicorp/kubernetes"
       version = ">= 2.0.0"
     }
-
-//    heroku = {
-//      source = "heroku/heroku"
-//      version = "3.2.0"
-//    }
   }
 }
 
 locals {
-  app_name = "MyBetterApp"
+  app_name = "my-app"
+  service_name = "service-name"
 }
 
 provider "kubernetes" {
@@ -26,40 +22,9 @@ provider "helm" {
   }
 }
 
-//
-//provider "heroku" {
-//  email = var.heroku_email
-//  api_key = var.heroku_api_key
-//}
-//
-//# Create a new Heroku app
-//resource "heroku_app" "db-hoster" {
-//  name = "k3s-postgres-hoster"
-//  region = "eu"
-//}
-//
-//
-//# Create a database, and configure the app to use it
-//resource "heroku_addon" "database" {
-//  app = heroku_app.db-hoster.name
-//  plan = "heroku-postgresql:hobby-dev"
-//}
-//
-//resource "kubernetes_secret" "app_database_url" {
-//  metadata {
-//    name = "app-database-url"
-//  }
-//
-//  data = {
-//    database_url = heroku_app.db-hoster.all_config_vars.DATABASE_URL
-//  }
-//
-//  type = "Opaque"
-//}
-
-resource "kubernetes_deployment" "lb" {
+resource "kubernetes_deployment" "my-app" {
   metadata {
-    name = "something"
+    name = local.app_name
   }
   spec {
     replicas = 3
@@ -76,49 +41,98 @@ resource "kubernetes_deployment" "lb" {
       }
       spec {
         container {
-          image = "nginxdemos/hello"
+          image = "tigrlily/mongo-app:v1"
           name = "gcr"
           port {
             container_port = 80
           }
-//          env {
-//            name = "DATABASE_URL"
-//            value_from {
-//              secret_key_ref {
-//                name = "app-database-url"
-//                key = "database_url"
-//              }
-//            }
-//          }
-        }
-        image_pull_secrets {
-          name = "gcr-json-key"
+          env {
+            name = "PORT"
+            value = "80"
+          }
+          env {
+            name = "MONGO_URI"
+            value = "mongodb://10.42.0.1:27017"
+          }
+          liveness_probe {
+            http_get {
+              path = "/healthcheck"
+              port = 80 // Can this be parameterized?
+            }
+          }
         }
       }
     }
   }
 }
-//
-//resource "kubernetes_service" "lb" {
-//  metadata {
-//    name = "something"
-//  }
-//  spec {
-//    selector = {
-//      app = local.app_name
-//    }
-//    type = "NodePort"
-//    port {
-//      node_port = 30201
-//      port = 80
-//      target_port = 80
-//    }
-//  }
-//}
+
+resource "kubernetes_pod" "my-sea-shell" {
+  metadata {
+    name = "sea-shell"
+  }
+  spec {
+    container {
+      image = "praqma/network-multitool"
+      name = "shell"
+      command = ["sleep", "10000"]
+    }
+  }
+}
+
+resource "kubernetes_service" "example" {
+  metadata {
+    name = local.service_name
+  }
+  spec {
+    selector = {
+      app = kubernetes_deployment.my-app.spec.0.template.0.metadata.0.labels.app
+    }
+    session_affinity = "ClientIP"
+
+    port {
+      port = 8081
+      target_port = 80
+    }
+  }
+}
+
+resource "kubernetes_ingress" "example_ingress" {
+  metadata {
+    name = "example-ingress"
+  }
+
+  spec {
+    backend {
+      service_name = local.service_name
+      service_port = kubernetes_service.example.spec.0.port.0.port
+    }
+
+    rule {
+      http {
+        path {
+          backend {
+            service_name = local.service_name
+            service_port = 80
+          }
+
+          path = "/app1/*"
+        }
+
+        path {
+          backend {
+            service_name = local.service_name
+            service_port = 8080
+          }
+
+          path = "/app2/*"
+        }
+      }
+    }
+  }
+}
 
 output "result" {
   value = {
     "local": local.app_name,
-    "actual": kubernetes_deployment.lb.spec.0.template.0.metadata.0.labels.app,
   }
 }
